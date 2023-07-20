@@ -1,0 +1,102 @@
+<template>
+    <lightning-card title="Create Contact">
+        <div class="slds-p-around_medium">
+            <lightning-combobox label="Select an Account" options={accountOptions} value={selectedAccountId} onchange={handleAccountChange}>
+            </lightning-combobox>
+
+            <lightning-input type="text" label="First Name" value={firstName} onchange={handleFirstNameChange}></lightning-input>
+            <lightning-input type="text" label="Last Name" value={lastName} onchange={handleLastNameChange}></lightning-input>
+
+            <div class="slds-m-top_medium">
+                <lightning-button label="Create Contact" variant="brand" onclick={createContact}></lightning-button>
+            </div>
+        </div>
+    </lightning-card>
+</template>
+
+----------------------------------------
+import { LightningElement, wire, track } from 'lwc';
+import { getRecord, createRecord } from 'lightning/uiRecordApi';
+import { ShowToastEvent } from 'lightning/platformShowToastEvent'; // Add this import
+import CONTACT_OBJECT from '@salesforce/schema/Contact';
+import ACCOUNT_FIELD from '@salesforce/schema/Contact.AccountId';
+import getAccounts from '@salesforce/apex/AccountContactFormController.getAccounts';
+
+const FIELDS = ['Account.Name'];
+
+export default class ContactCreation extends LightningElement {
+    @track selectedAccountId = '';
+    @track firstName = '';
+    @track lastName = '';
+    @track accountOptions = [];
+
+    // Load Account options for lookup
+    @wire(getAccounts)
+    wiredAccounts({ error, data }) {
+        if (data) {
+            this.accountOptions = data.map(account => ({ label: account.Name, value: account.Id }));
+        } else if (error) {
+            // Handle error
+        }
+    }
+
+    // Load Account Name for the selected Account
+    @wire(getRecord, { recordId: '$selectedAccountId', fields: FIELDS })
+    wiredAccount({ error, data }) {
+        if (data) {
+            this.accountOptions = [{ label: data.fields.Name.value, value: this.selectedAccountId }];
+        } else if (error) {
+            // Handle error
+        }
+    }
+
+    handleAccountChange(event) {
+        this.selectedAccountId = event.detail.value;
+    }
+
+    handleFirstNameChange(event) {
+        this.firstName = event.detail.value;
+    }
+
+    handleLastNameChange(event) {
+        this.lastName = event.detail.value;
+    }
+
+    createContact() {
+        const fields = {};
+        fields[ACCOUNT_FIELD.fieldApiName] = this.selectedAccountId;
+        fields.FirstName = this.firstName;
+        fields.LastName = this.lastName;
+
+        const recordInput = { apiName: CONTACT_OBJECT.objectApiName, fields };
+        createRecord(recordInput)
+            .then(result => {
+                // Handle success
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Success',
+                        message: 'Contact created successfully!',
+                        variant: 'success'
+                    })
+                );
+            })
+            .catch(error => {
+                // Handle error
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Error creating contact',
+                        message: error.body.message,
+                        variant: 'error'
+                    })
+                );
+            });
+    }
+}
+
+public with sharing class AccountContactFormController {
+    @AuraEnabled(cacheable=true)
+    public static List<Account> getAccounts() {
+        return [SELECT Id, Name FROM Account limit 50];
+    }
+}
+
