@@ -1,11 +1,16 @@
+----------------------------------------accountContactForm.html 
 <template>
     <lightning-card title="Create Contact">
         <div class="slds-p-around_medium">
-            <lightning-combobox label="Select an Account" options={accountOptions} value={selectedAccountId} onchange={handleAccountChange}>
-            </lightning-combobox>
+            <!-- Replace the lightning-combobox with custom-lookup -->
+            <c-custom-lookup
+                search-key={searchKey}
+                records-list={accountOptions}
+                onrecordselect={handleAccountChange}
+            ></c-custom-lookup>
 
-            <lightning-input type="text" label="First Name" value={firstName} onchange={handleFirstNameChange}></lightning-input>
-            <lightning-input type="text" label="Last Name" value={lastName} onchange={handleLastNameChange}></lightning-input>
+            <lightning-input type="text" label="First Name" value={firstName} onchange={handleFieldChange}></lightning-input>
+            <lightning-input type="text" label="Last Name" value={lastName} onchange={handleFieldChange}></lightning-input>
 
             <div class="slds-m-top_medium">
                 <lightning-button label="Create Contact" variant="brand" onclick={createContact}></lightning-button>
@@ -14,74 +19,68 @@
     </lightning-card>
 </template>
 
-----------------------------------------
-import { LightningElement, wire, track } from 'lwc';
-import { getRecord, createRecord } from 'lightning/uiRecordApi';
-import { ShowToastEvent } from 'lightning/platformShowToastEvent'; // Add this import
-import CONTACT_OBJECT from '@salesforce/schema/Contact';
-import ACCOUNT_FIELD from '@salesforce/schema/Contact.AccountId';
+---------------------------------------- accountContactForm.js
+
+import { LightningElement, wire } from 'lwc';
+import { createRecord } from 'lightning/uiRecordApi';
+import { ShowToastEvent } from 'lightning/platformShowToastEvent';
 import getAccounts from '@salesforce/apex/AccountContactFormController.getAccounts';
+import CONTACT_OBJECT from '@salesforce/schema/Contact';
+import FIRSTNAME_FIELD from '@salesforce/schema/Contact.FirstName';
+import LASTNAME_FIELD from '@salesforce/schema/Contact.LastName';
+import ACCOUNTID_FIELD from '@salesforce/schema/Contact.AccountId';
 
-const FIELDS = ['Account.Name'];
+export default class AccountContactForm extends LightningElement {
+    accountOptions = [];
+    firstName = '';
+    lastName = '';
+    accountId = '';
 
-export default class ContactCreation extends LightningElement {
-    @track selectedAccountId = '';
-    @track firstName = '';
-    @track lastName = '';
-    @track accountOptions = [];
-
-    // Load Account options for lookup
     @wire(getAccounts)
-    wiredAccounts({ error, data }) {
+    accounts({ error, data }) {
         if (data) {
-            this.accountOptions = data.map(account => ({ label: account.Name, value: account.Id }));
+            this.accountOptions = data.map(account => {
+                return {
+                    label: account.Name,
+                    value: account.Id
+                };
+            });
         } else if (error) {
-            // Handle error
+            console.error(error);
         }
     }
 
-    // Load Account Name for the selected Account
-    @wire(getRecord, { recordId: '$selectedAccountId', fields: FIELDS })
-    wiredAccount({ error, data }) {
-        if (data) {
-            this.accountOptions = [{ label: data.fields.Name.value, value: this.selectedAccountId }];
-        } else if (error) {
-            // Handle error
+    handleFieldChange(event) {
+        if (event.target.label === 'First Name') {
+            this.firstName = event.target.value;
+        } else if (event.target.label === 'Last Name') {
+            this.lastName = event.target.value;
         }
     }
 
     handleAccountChange(event) {
-        this.selectedAccountId = event.detail.value;
-    }
-
-    handleFirstNameChange(event) {
-        this.firstName = event.detail.value;
-    }
-
-    handleLastNameChange(event) {
-        this.lastName = event.detail.value;
+        this.accountId = event.detail.accountId;
     }
 
     createContact() {
         const fields = {};
-        fields[ACCOUNT_FIELD.fieldApiName] = this.selectedAccountId;
-        fields.FirstName = this.firstName;
-        fields.LastName = this.lastName;
+        fields[FIRSTNAME_FIELD.fieldApiName] = this.firstName;
+        fields[LASTNAME_FIELD.fieldApiName] = this.lastName;
+        fields[ACCOUNTID_FIELD.fieldApiName] = this.accountId;
 
         const recordInput = { apiName: CONTACT_OBJECT.objectApiName, fields };
         createRecord(recordInput)
-            .then(result => {
-                // Handle success
+            .then(contact => {
                 this.dispatchEvent(
                     new ShowToastEvent({
                         title: 'Success',
-                        message: 'Contact created successfully!',
+                        message: 'Contact created',
                         variant: 'success'
                     })
                 );
             })
             .catch(error => {
-                // Handle error
+                console.error(error);
                 this.dispatchEvent(
                     new ShowToastEvent({
                         title: 'Error creating contact',
@@ -93,10 +92,158 @@ export default class ContactCreation extends LightningElement {
     }
 }
 
+----------------------------------------AccountContactFormController.cls
 public with sharing class AccountContactFormController {
     @AuraEnabled(cacheable=true)
     public static List<Account> getAccounts() {
-        return [SELECT Id, Name FROM Account limit 50];
+        return [SELECT Id, Name FROM Account LIMIT 50];
+    }
+    
+    @AuraEnabled
+    public static List<SObject> searchRecords(String objectName, String searchString) {
+        String searchKey = '%' + searchString + '%';
+        String objectApiName = objectName.toLowerCase();
+        List<SObject> records = new List<SObject>();
+        Schema.DescribeSObjectResult objDescribe = Schema.getGlobalDescribe().get(objectApiName).getDescribe();
+        if (objDescribe.isSearchable()) {
+            String soqlQuery = 'SELECT Id, Name, Website FROM ' + objectApiName + ' WHERE Name LIKE \'' + searchKey + '\' LIMIT 10';
+            records.addAll(Database.query(soqlQuery));
+        }
+        return records;
     }
 }
+
+------------------------------------------customLookup.html
+<template>
+    <lightning-card>
+      <div class="slds-form-element slds-grid">
+        <div class="slds-col">
+          <strong><p style="margin: 5px; font-size: 15px">{objectApiName}</p></strong>
+          <lightning-input class="input-style input-lable" type="text" id="search" value={searchString} placeholder="Search..." onchange={search}></lightning-input>
+        </div>
+      </div>
+  
+      <template if:true={records.length}>
+        <div class="slds-card">
+          <ul class="slds-has-dividers_around-space">
+            <template for:each={records} for:item="record">
+              <li key={record.Id} class="slds-p-vertical_small">
+                <div class="slds-grid slds-align-top">
+                  <lightning-icon icon-name={iconName} size="small" alternative-text="icon" class="slds-m-right_small"></lightning-icon>
+                  <a onclick={selectRecord} data-record={record.Id}>
+                    <div>
+                      <span>{record.Name}</span>
+                      <template if:true={record.Website}>
+                        <div>{record.Website}</div>
+                      </template>
+                    </div>
+                  </a>
+                </div>
+              </li>
+            </template>
+          </ul>
+        </div>
+      </template>
+  
+      <template if:true={hasSelectedRecord}>
+        <div class="slds-form-element">
+          <lightning-input type="text" id="selectedRecord" label="Selected Record" value={selectedRecord.Name} readonly></lightning-input>
+        </div>
+      </template>
+    </lightning-card>
+  </template>
+  
+------------------------------------------customLookup.js
+import { LightningElement, wire, api } from 'lwc';
+import searchRecords from '@salesforce/apex/customLookupFA.searchRecords';
+
+export default class CustomLookupFA extends LightningElement {
+    objectApiName = 'Account';
+    searchString = '';
+    records = [];
+    selectedRecord;
+    @api iconName = 'standard:account';
+
+    connectedCallback() {
+        console.log('Custom lookup');
+    }
+
+    search(event) {
+        this.searchString = event.target.value;
+        if (this.searchString.length >= 2) {
+            searchRecords({ objectName: this.objectApiName, searchString: this.searchString })
+                .then(result => {
+                    this.records = result;
+                    console.log('Returned records: ', result);
+                })
+                .catch(error => {
+                    console.error(error);
+                });
+        } else {
+            this.records = [];
+            console.log('Cleared records');
+        }
+    }
+
+    selectRecord(event) {
+        const selectedRecordId = event.currentTarget.dataset.record;
+        this.selectedRecord = this.records.find(record => record.Id === selectedRecordId).Name;
+        this.searchString = this.selectedRecord;
+        this.records = [];
+
+        // Fire the custom event to notify the parent component with the selected Account Id
+        const selectEvent = new CustomEvent('recordselect', {
+            detail: {
+                accountId: selectedRecordId
+            }
+        });
+        this.dispatchEvent(selectEvent);
+    }
+
+    clearSelectedRecord() {
+        this.selectedRecord = null;
+        this.searchString = '';
+    }
+
+    get hasSelectedRecord() {
+        return !!this.selectedRecord;
+    }
+}
+
+
+------------------------------------------customLookup.css
+.slds-grid.slds-align-top {
+    display: flex;
+    align-items: flex-start;
+  }
+  
+  .slds-m-right_small {
+    margin-right: 0.5rem;
+  }
+  
+  /* Additional styles for the card */
+  .slds-card {
+    border: 1px solid #d8dde6;
+    border-radius: 0.25rem;
+    padding: 1rem;
+    margin-top: 0rem;
+  }
+
+-------------customLookupFA.cls
+public with sharing class customLookupFA {
+    @AuraEnabled
+    public static List<SObject> searchRecords(String objectName, String searchString) {
+        String searchKey = '%' +searchString + '%';
+        String objectApiName = objectName.toLowerCase();
+        List<SObject> records = new List<SObject>();
+        Schema.DescribeSObjectResult objDescribe = Schema.getGlobalDescribe().get(objectApiName).getDescribe();
+        if (objDescribe.isSearchable()) {
+            String soqlQuery = 'SELECT Id, Name, Website FROM ' + objectApiName + ' WHERE Name LIKE \'' + searchKey + '\' LIMIT 10';
+            records.addAll(Database.query(soqlQuery));
+        }
+        return records;
+    }
+}
+
+
 
